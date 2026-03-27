@@ -1,5 +1,7 @@
 # Omi Workflow
 
+![CI](https://github.com/jasondickenrealty-lang/Omi-workflow/actions/workflows/ci.yml/badge.svg)
+
 FastAPI backend for the Omi AI glasses workflow: webhook ingestion, trigger detection, voice command storage, media handling, and JWT-authenticated access to protected routes.
 
 ## Features
@@ -50,4 +52,4 @@ FastAPI backend for the Omi AI glasses workflow: webhook ingestion, trigger dete
 A reusable coding prompt is included in `PROMPT.md`.
 
 ## License
-Add your preferred license in this repository.
+MIT. See the LICENSE file.
