@@ -32,13 +32,13 @@ class GlassesService {
     this.manager = new BleManager();
     this.device = null;
     this.connected = false;
-    this.photoChunks = [];
-    this.currentFrameIdx = -1;
+    this.jpegBuffer = Buffer.alloc(0);
+    this.awaitingJpeg = false;
     this.onPhotoCallback = null;
     this.onStatusCallback = null;
     this.onBatteryCallback = null;
     this.photoCount = 0;
-    this.assembleTimer = null;
+    this.maxJpegBytes = 2 * 1024 * 1024;
   }
 
   setOnPhoto(callback) {
@@ -181,63 +181,94 @@ class GlassesService {
 
   _handlePhotoChunk(base64Value) {
     const bytes = Buffer.from(base64Value, "base64");
+    if (!bytes || bytes.length === 0) return;
 
-    // End marker: 0xFF 0xFF
+    // Device-level terminator used by some firmware variants.
     if (bytes.length === 2 && bytes[0] === 0xff && bytes[1] === 0xff) {
-      this._assemblePhoto();
+      if (this.awaitingJpeg && this.jpegBuffer.length > 0) {
+        const forced = Buffer.concat([this.jpegBuffer, Buffer.from([0xff, 0xd9])]);
+        this.jpegBuffer = Buffer.alloc(0);
+        this.awaitingJpeg = false;
+        this._consumeCompletedJpeg(forced);
+      }
       return;
     }
 
-    if (bytes.length < 3) return;
-
-    // Frame index from first 2 bytes
-    const frameIdx = bytes[0] | (bytes[1] << 8);
-
-    if (frameIdx !== this.currentFrameIdx) {
-      // New frame starting — if we had chunks from a previous frame, assemble it
-      if (this.photoChunks.length > 0) {
-        this._assemblePhoto();
-      }
-      this.currentFrameIdx = frameIdx;
-
-      // Some firmware sends [2B frame][1B orientation][jpeg], others [2B frame][jpeg].
+    // Omi chunk headers: [2B frame], optional [1B orientation on first chunk].
+    let payload = bytes;
+    if (bytes.length >= 3) {
       const hasOrientation =
         bytes.length >= 5 &&
         bytes[2] <= 8 &&
         bytes[3] === 0xff &&
         bytes[4] === 0xd8;
-      this.photoChunks.push(bytes.slice(hasOrientation ? 3 : 2));
-    } else {
-      // Continuation chunk
-      this.photoChunks.push(bytes.slice(2)); // skip 2B frame idx
+      payload = bytes.slice(hasOrientation ? 3 : 2);
     }
 
-    // If this chunk appears to terminate a JPEG, assemble immediately.
-    if (bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9) {
-      this._assemblePhoto();
+    this._ingestJpegPayload(payload);
+  }
+
+  _ingestJpegPayload(payload) {
+    if (!payload || payload.length === 0) return;
+
+    // If we're not currently collecting a JPEG, look for SOI marker.
+    if (!this.awaitingJpeg) {
+      const soi = payload.indexOf(Buffer.from([0xff, 0xd8]));
+      if (soi === -1) {
+        return;
+      }
+      this.awaitingJpeg = true;
+      this.jpegBuffer = payload.slice(soi);
+    } else {
+      this.jpegBuffer = Buffer.concat([this.jpegBuffer, payload]);
+    }
+
+    if (this.jpegBuffer.length > this.maxJpegBytes) {
+      this._updateStatus("Dropping oversized/invalid image stream");
+      this.jpegBuffer = Buffer.alloc(0);
+      this.awaitingJpeg = false;
       return;
     }
 
-    // Fallback: if no explicit end marker arrives, flush after short inactivity.
-    if (this.assembleTimer) {
-      clearTimeout(this.assembleTimer);
+    // One payload can contain one or more complete JPEGs.
+    while (this.awaitingJpeg) {
+      const eoi = this.jpegBuffer.indexOf(Buffer.from([0xff, 0xd9]));
+      if (eoi === -1) break;
+
+      const complete = this.jpegBuffer.slice(0, eoi + 2);
+      const remaining = this.jpegBuffer.slice(eoi + 2);
+      this.jpegBuffer = Buffer.alloc(0);
+      this.awaitingJpeg = false;
+      this._consumeCompletedJpeg(complete);
+
+      // Continue scanning trailing bytes for next SOI.
+      if (remaining.length > 0) {
+        const soi = remaining.indexOf(Buffer.from([0xff, 0xd8]));
+        if (soi !== -1) {
+          this.awaitingJpeg = true;
+          this.jpegBuffer = remaining.slice(soi);
+        }
+      }
     }
-    this.assembleTimer = setTimeout(() => {
-      this._assemblePhoto();
-    }, 450);
   }
 
-  async _assemblePhoto() {
-    if (this.photoChunks.length === 0) return;
+  _consumeCompletedJpeg(jpeg) {
+    const isValidJpeg =
+      jpeg &&
+      jpeg.length >= 2048 &&
+      jpeg[0] === 0xff &&
+      jpeg[1] === 0xd8 &&
+      jpeg[jpeg.length - 2] === 0xff &&
+      jpeg[jpeg.length - 1] === 0xd9;
 
-    if (this.assembleTimer) {
-      clearTimeout(this.assembleTimer);
-      this.assembleTimer = null;
+    if (!isValidJpeg) {
+      return;
     }
 
-    const jpeg = Buffer.concat(this.photoChunks);
-    this.photoChunks = [];
-    this.currentFrameIdx = -1;
+    void this._saveAndUploadPhoto(jpeg);
+  }
+
+  async _saveAndUploadPhoto(jpeg) {
     this.photoCount++;
     this._updateStatus(`Photo ${this.photoCount} captured`);
 
