@@ -1,0 +1,14 @@
+services:
+  omi:
+    build: .
+    ports:
+      - "9000:9000"
+    volumes:
+      # Persist the SQLite database outside the container
+      - omi-data:/app/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  omi-data:
