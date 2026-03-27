@@ -61,24 +61,24 @@ class GlassesService {
       throw new Error("Glasses are not connected");
     }
 
-    // Firmware docs indicate control values in range 5-300, 0=stop, -1=snap.
-    // Try a 16-bit payload first (supports full range), then fall back to int8.
+    // Most firmware builds use 1-byte control values (0=stop, -1=snap, 5-127 interval).
+    // Try int8 first for compatibility, then fall back to int16 if needed.
     try {
-      const int16 = Buffer.alloc(2);
-      int16.writeInt16LE(value);
-      await this.device.writeCharacteristicWithResponseForService(
-        SERVICE_UUID,
-        PHOTO_CONTROL_UUID,
-        int16.toString("base64")
-      );
-      return;
-    } catch (e) {
       const int8 = Buffer.alloc(1);
       int8.writeInt8(Math.max(-1, Math.min(value, 127)));
       await this.device.writeCharacteristicWithResponseForService(
         SERVICE_UUID,
         PHOTO_CONTROL_UUID,
         int8.toString("base64")
+      );
+      return;
+    } catch (e) {
+      const int16 = Buffer.alloc(2);
+      int16.writeInt16LE(value);
+      await this.device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        PHOTO_CONTROL_UUID,
+        int16.toString("base64")
       );
     }
   }
