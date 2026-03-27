@@ -1,6 +1,8 @@
 # Omi Workflow
 
 ![CI](https://github.com/jasondickenrealty-lang/Omi-workflow/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.11-blue.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 FastAPI backend for the Omi AI glasses workflow: webhook ingestion, trigger detection, voice command storage, media handling, and JWT-authenticated access to protected routes.
 
