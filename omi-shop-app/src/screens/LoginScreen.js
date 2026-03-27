@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../services/api";
 
 export default function LoginScreen() {
   const { login } = useAuth();
@@ -23,10 +24,7 @@ export default function LoginScreen() {
     try {
       await login(username, password);
     } catch (e) {
-      const msg =
-        e?.response?.data?.detail ||
-        e?.message ||
-        "Could not connect to server";
+      const msg = formatApiError(e);
       Alert.alert("Login Failed", msg);
     }
     setBusy(false);

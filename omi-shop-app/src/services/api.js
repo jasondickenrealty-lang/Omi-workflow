@@ -3,13 +3,50 @@ import * as SecureStore from "expo-secure-store";
 
 const API_BASE = "http://187.77.12.9:9000";
 
-const api = axios.create({ baseURL: API_BASE });
+const api = axios.create({
+  baseURL: API_BASE,
+  timeout: 15000,
+});
+
+export const formatApiError = (err) => {
+  const status = err?.response?.status;
+  const detail = err?.response?.data?.detail;
+  const dataText =
+    err?.response?.data && typeof err.response.data !== "string"
+      ? JSON.stringify(err.response.data)
+      : err?.response?.data;
+  const code = err?.code;
+  const message = err?.message;
+  const method = err?.config?.method?.toUpperCase?.() || "REQUEST";
+  const url = err?.config?.baseURL
+    ? `${err.config.baseURL}${err?.config?.url || ""}`
+    : err?.config?.url || API_BASE;
+
+  if (status || detail) {
+    return `${method} ${url}\nHTTP ${status || "?"}\n${detail || dataText || "Request failed"}`;
+  }
+
+  if (code === "ECONNABORTED") {
+    return `${method} ${url}\nNetwork timeout after 15s`;
+  }
+
+  if (message && message.toLowerCase().includes("network error")) {
+    return `${method} ${url}\nNetwork Error (check Android cleartext policy, VPS firewall, and server reachability)`;
+  }
+
+  return `${method} ${url}\n${message || "Could not connect to server"}`;
+};
 
 // Attach JWT to every request if we have one
 api.interceptors.request.use(async (config) => {
-  const token = await SecureStore.getItemAsync("jwt");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  try {
+    const token = await SecureStore.getItemAsync("jwt");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch (err) {
+    // Do not block requests if secure storage is temporarily unavailable.
+    console.warn("SecureStore read failed while building auth header", err);
   }
   return config;
 });
