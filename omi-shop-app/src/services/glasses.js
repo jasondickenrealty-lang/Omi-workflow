@@ -92,16 +92,23 @@ class GlassesService {
         reject(new Error("No Omi Glasses found"));
       }, 15000);
 
-      this.manager.startDeviceScan(null, null, (error, device) => {
+      this.manager.startDeviceScan([SERVICE_UUID], null, (error, device) => {
         if (error) {
           clearTimeout(timeout);
           reject(error);
           return;
         }
-        if (device && device.name && device.name.includes("OMI")) {
+
+        const name = device?.name || device?.localName || "";
+        const serviceUUIDs = device?.serviceUUIDs || [];
+        const hasService =
+          serviceUUIDs.length === 0 ||
+          serviceUUIDs.some((uuid) => uuid?.toUpperCase?.() === SERVICE_UUID);
+
+        if (device && name.toUpperCase().includes("OMI") && hasService) {
           clearTimeout(timeout);
           this.manager.stopDeviceScan();
-          this._updateStatus(`Found: ${device.name}`);
+          this._updateStatus(`Found Omi device: ${name}`);
           resolve(device);
         }
       });
@@ -113,8 +120,21 @@ class GlassesService {
 
     this.device = await device.connect({ requestMTU: 517 });
     await this.device.discoverAllServicesAndCharacteristics();
+
+    const photoChars = await this.device.characteristicsForService(SERVICE_UUID);
+    const photoCharUuids = photoChars.map((c) => c.uuid?.toUpperCase?.());
+    const hasPhotoData = photoCharUuids.includes(PHOTO_DATA_UUID);
+    const hasPhotoControl = photoCharUuids.includes(PHOTO_CONTROL_UUID);
+
+    if (!hasPhotoData || !hasPhotoControl) {
+      await this.device.cancelConnection();
+      this.device = null;
+      this.connected = false;
+      throw new Error("Connected device does not expose Omi photo characteristics");
+    }
+
     this.connected = true;
-    this._updateStatus("Connected");
+    this._updateStatus("Connected to Omi glasses");
 
     // Read battery level
     await this._readBattery();
@@ -129,6 +149,7 @@ class GlassesService {
           return;
         }
         if (characteristic?.value) {
+          this._updateStatus("Receiving photo data...");
           this._handlePhotoChunk(characteristic.value);
         }
       }
