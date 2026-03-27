@@ -86,17 +86,30 @@ export default function GlassesScreen() {
   };
 
   const handleStartCapture = async () => {
-    await glassesService.setCaptureInterval(4); // every 4 seconds
-    setCapturing(true);
+    try {
+      await glassesService.setCaptureInterval(5); // firmware minimum is 5 seconds
+      setCapturing(true);
+    } catch (e) {
+      Alert.alert("Start Capture Failed", e?.message || "Could not start auto capture");
+      setCapturing(false);
+    }
   };
 
   const handleStopCapture = async () => {
-    await glassesService.stopCapture();
-    setCapturing(false);
+    try {
+      await glassesService.stopCapture();
+      setCapturing(false);
+    } catch (e) {
+      Alert.alert("Stop Capture Failed", e?.message || "Could not stop auto capture");
+    }
   };
 
   const handleSingleShot = async () => {
-    await glassesService.takePhoto();
+    try {
+      await glassesService.takePhoto();
+    } catch (e) {
+      Alert.alert("Snap Failed", e?.message || "Could not trigger single photo");
+    }
   };
 
   return (
@@ -130,7 +143,7 @@ export default function GlassesScreen() {
           <View style={styles.controlRow}>
             {!capturing ? (
               <TouchableOpacity style={styles.startBtn} onPress={handleStartCapture}>
-                <Text style={styles.btnText}>Start Auto (4s)</Text>
+                <Text style={styles.btnText}>Start Auto (5s)</Text>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity style={styles.stopBtn} onPress={handleStopCapture}>

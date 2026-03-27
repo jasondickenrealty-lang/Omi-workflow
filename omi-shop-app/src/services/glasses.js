@@ -56,6 +56,33 @@ class GlassesService {
     if (this.onStatusCallback) this.onStatusCallback(status);
   }
 
+  async _writePhotoControl(value) {
+    if (!this.device || !this.connected) {
+      throw new Error("Glasses are not connected");
+    }
+
+    // Firmware docs indicate control values in range 5-300, 0=stop, -1=snap.
+    // Try a 16-bit payload first (supports full range), then fall back to int8.
+    try {
+      const int16 = Buffer.alloc(2);
+      int16.writeInt16LE(value);
+      await this.device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        PHOTO_CONTROL_UUID,
+        int16.toString("base64")
+      );
+      return;
+    } catch (e) {
+      const int8 = Buffer.alloc(1);
+      int8.writeInt8(Math.max(-1, Math.min(value, 127)));
+      await this.device.writeCharacteristicWithResponseForService(
+        SERVICE_UUID,
+        PHOTO_CONTROL_UUID,
+        int8.toString("base64")
+      );
+    }
+  }
+
   async scan() {
     this._updateStatus("Scanning for Omi Glasses...");
 
@@ -193,51 +220,27 @@ class GlassesService {
   }
 
   async setCaptureInterval(seconds) {
-    if (!this.device || !this.connected) return;
-    try {
-      // Write interval value to photo control characteristic
-      // Firmware accepts values 5-300 (seconds), 0 = stop, -1 = single shot
-      const value = Buffer.alloc(1);
-      value.writeInt8(Math.max(0, Math.min(seconds, 127)));
-      await this.device.writeCharacteristicWithResponseForService(
-        SERVICE_UUID,
-        PHOTO_CONTROL_UUID,
-        value.toString("base64")
-      );
-    } catch (e) {
-      console.log("Set interval error:", e);
+    if (seconds !== 0 && seconds < 5) {
+      throw new Error("Auto capture interval must be at least 5 seconds");
     }
+
+    const safeSeconds = Math.max(0, Math.min(seconds, 300));
+    await this._writePhotoControl(safeSeconds);
+    this._updateStatus(
+      safeSeconds === 0
+        ? "Capture stopped"
+        : `Auto capture every ${safeSeconds}s`
+    );
   }
 
   async takePhoto() {
-    if (!this.device || !this.connected) return;
-    try {
-      // -1 = single shot trigger
-      const value = Buffer.alloc(1);
-      value.writeInt8(-1);
-      await this.device.writeCharacteristicWithResponseForService(
-        SERVICE_UUID,
-        PHOTO_CONTROL_UUID,
-        value.toString("base64")
-      );
-    } catch (e) {
-      console.log("Take photo error:", e);
-    }
+    await this._writePhotoControl(-1);
+    this._updateStatus("Single shot requested");
   }
 
   async stopCapture() {
-    if (!this.device || !this.connected) return;
-    try {
-      const value = Buffer.alloc(1);
-      value.writeInt8(0);
-      await this.device.writeCharacteristicWithResponseForService(
-        SERVICE_UUID,
-        PHOTO_CONTROL_UUID,
-        value.toString("base64")
-      );
-    } catch (e) {
-      console.log("Stop capture error:", e);
-    }
+    await this._writePhotoControl(0);
+    this._updateStatus("Capture stopped");
   }
 
   async disconnect() {
