@@ -14,6 +14,7 @@ export default function LoginScreen() {
   const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const handleLogin = async () => {
@@ -22,7 +23,11 @@ export default function LoginScreen() {
     try {
       await login(username, password);
     } catch (e) {
-      Alert.alert("Login Failed", "Check your username and password.");
+      const msg =
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Could not connect to server";
+      Alert.alert("Login Failed", msg);
     }
     setBusy(false);
   };
@@ -37,17 +42,29 @@ export default function LoginScreen() {
         placeholder="Username"
         placeholderTextColor="#999"
         autoCapitalize="none"
+        autoCorrect={false}
         value={username}
         onChangeText={setUsername}
       />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        placeholderTextColor="#999"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
+
+      <View style={styles.passwordRow}>
+        <TextInput
+          style={styles.passwordInput}
+          placeholder="Password"
+          placeholderTextColor="#999"
+          secureTextEntry={!showPassword}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={password}
+          onChangeText={setPassword}
+        />
+        <TouchableOpacity
+          style={styles.eyeBtn}
+          onPress={() => setShowPassword(!showPassword)}
+        >
+          <Text style={styles.eyeText}>{showPassword ? "HIDE" : "SHOW"}</Text>
+        </TouchableOpacity>
+      </View>
 
       <TouchableOpacity
         style={styles.button}
@@ -93,6 +110,30 @@ const styles = StyleSheet.create({
     fontSize: 16,
     borderWidth: 1,
     borderColor: "#333",
+  },
+  passwordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#16213e",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#333",
+    marginBottom: 14,
+  },
+  passwordInput: {
+    flex: 1,
+    color: "#fff",
+    padding: 14,
+    fontSize: 16,
+  },
+  eyeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  eyeText: {
+    color: "#e94560",
+    fontSize: 13,
+    fontWeight: "bold",
   },
   button: {
     backgroundColor: "#e94560",
