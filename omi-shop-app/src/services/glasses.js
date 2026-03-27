@@ -38,6 +38,7 @@ class GlassesService {
     this.onStatusCallback = null;
     this.onBatteryCallback = null;
     this.photoCount = 0;
+    this.assembleTimer = null;
   }
 
   setOnPhoto(callback) {
@@ -187,6 +188,8 @@ class GlassesService {
       return;
     }
 
+    if (bytes.length < 3) return;
+
     // Frame index from first 2 bytes
     const frameIdx = bytes[0] | (bytes[1] << 8);
 
@@ -196,21 +199,47 @@ class GlassesService {
         this._assemblePhoto();
       }
       this.currentFrameIdx = frameIdx;
-      // First chunk has 1 byte orientation + image data
-      this.photoChunks.push(bytes.slice(3)); // skip 2B frame idx + 1B orientation
+
+      // Some firmware sends [2B frame][1B orientation][jpeg], others [2B frame][jpeg].
+      const hasOrientation =
+        bytes.length >= 5 &&
+        bytes[2] <= 8 &&
+        bytes[3] === 0xff &&
+        bytes[4] === 0xd8;
+      this.photoChunks.push(bytes.slice(hasOrientation ? 3 : 2));
     } else {
       // Continuation chunk
       this.photoChunks.push(bytes.slice(2)); // skip 2B frame idx
     }
+
+    // If this chunk appears to terminate a JPEG, assemble immediately.
+    if (bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9) {
+      this._assemblePhoto();
+      return;
+    }
+
+    // Fallback: if no explicit end marker arrives, flush after short inactivity.
+    if (this.assembleTimer) {
+      clearTimeout(this.assembleTimer);
+    }
+    this.assembleTimer = setTimeout(() => {
+      this._assemblePhoto();
+    }, 450);
   }
 
   async _assemblePhoto() {
     if (this.photoChunks.length === 0) return;
 
+    if (this.assembleTimer) {
+      clearTimeout(this.assembleTimer);
+      this.assembleTimer = null;
+    }
+
     const jpeg = Buffer.concat(this.photoChunks);
     this.photoChunks = [];
     this.currentFrameIdx = -1;
     this.photoCount++;
+    this._updateStatus(`Photo ${this.photoCount} captured`);
 
     // Save locally first
     const filename = `photo_${Date.now()}.jpg`;
