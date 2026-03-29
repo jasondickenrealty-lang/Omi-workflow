@@ -17,7 +17,9 @@
 
 import { BleManager } from "react-native-ble-plx";
 import { Buffer } from "buffer";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
+import { Platform } from "react-native";
+import BackgroundService from "react-native-background-actions";
 
 const SERVICE_UUID = "19B10000-E8F2-537E-4F6C-D104768A1214";
 const PHOTO_DATA_UUID = "19B10005-E8F2-537E-4F6C-D104768A1214";
@@ -26,6 +28,19 @@ const BATTERY_SERVICE_UUID = "0000180F-0000-1000-8000-00805F9B34FB";
 const BATTERY_LEVEL_UUID = "00002A19-0000-1000-8000-00805F9B34FB";
 
 const API_BASE = "http://187.77.12.9:9000";
+const CAPTURE_SERVICE_OPTIONS = {
+  taskName: "OmiCapture",
+  taskTitle: "Omi capture running",
+  taskDesc: "Auto-capturing photos from Omi glasses",
+  taskIcon: {
+    name: "ic_launcher",
+    type: "mipmap",
+  },
+  color: "#e94560",
+  parameters: {
+    delay: 5000,
+  },
+};
 
 class GlassesService {
   constructor() {
@@ -39,6 +54,95 @@ class GlassesService {
     this.onBatteryCallback = null;
     this.photoCount = 0;
     this.maxJpegBytes = 2 * 1024 * 1024;
+    this.autoCaptureTimer = null;
+    this.autoCaptureSeconds = 0;
+  }
+
+  _clearAutoCaptureTimer() {
+    if (this.autoCaptureTimer) {
+      clearInterval(this.autoCaptureTimer);
+      this.autoCaptureTimer = null;
+    }
+  }
+
+  _sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async _startAndroidBackgroundCapture(seconds) {
+    if (Platform.OS !== "android" || seconds <= 0) {
+      return false;
+    }
+
+    const delayMs = seconds * 1000;
+
+    const captureTask = async ({ delay }) => {
+      while (BackgroundService.isRunning()) {
+        if (!this.connected || !this.device) {
+          await this._sleep(delay);
+          continue;
+        }
+        try {
+          await this._writePhotoControl(-1);
+        } catch (err) {
+          this._updateStatus(`Background capture error: ${err?.message || err}`);
+        }
+        await this._sleep(delay);
+      }
+    };
+
+    if (BackgroundService.isRunning()) {
+      await BackgroundService.stop();
+    }
+
+    await BackgroundService.start(captureTask, {
+      ...CAPTURE_SERVICE_OPTIONS,
+      parameters: { delay: delayMs },
+      taskDesc: `Auto-capturing every ${seconds}s`,
+    });
+
+    return true;
+  }
+
+  async _stopAndroidBackgroundCapture() {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    if (BackgroundService.isRunning()) {
+      await BackgroundService.stop();
+    }
+  }
+
+  async _stopAutoCaptureLoop() {
+    this._clearAutoCaptureTimer();
+    await this._stopAndroidBackgroundCapture();
+  }
+
+  async _startAutoCaptureFallback(seconds) {
+    this._clearAutoCaptureTimer();
+    this.autoCaptureSeconds = seconds;
+    if (seconds <= 0) return;
+
+    const startedBackground = await this._startAndroidBackgroundCapture(seconds);
+    if (startedBackground) {
+      this._updateStatus(`Background capture every ${seconds}s`);
+      return;
+    }
+
+    // Stable app-side fallback loop.
+    this.autoCaptureTimer = setInterval(async () => {
+      if (!this.connected || !this.device) {
+        this._clearAutoCaptureTimer();
+        return;
+      }
+      try {
+        await this._writePhotoControl(-1);
+      } catch (err) {
+        this._updateStatus(`Auto capture error: ${err?.message || err}`);
+      }
+    }, seconds * 1000);
+
+    this._updateStatus(`Auto capture every ${seconds}s`);
   }
 
   setOnPhoto(callback) {
@@ -150,7 +254,6 @@ class GlassesService {
           return;
         }
         if (characteristic?.value) {
-          this._updateStatus("Receiving photo data...");
           this._handlePhotoChunk(characteristic.value);
         }
       }
@@ -159,6 +262,7 @@ class GlassesService {
     // Handle disconnect
     this.device.onDisconnected((error, dev) => {
       this.connected = false;
+      void this._stopAutoCaptureLoop();
       this._updateStatus("Disconnected");
     });
   }
@@ -183,13 +287,26 @@ class GlassesService {
     const bytes = Buffer.from(base64Value, "base64");
     if (!bytes || bytes.length === 0) return;
 
+    // DEBUG: Show that chunks are arriving
+    this._updateStatus(`>>> CHUNK: ${bytes.length}B [${bytes[0]?.toString(16)},${bytes[1]?.toString(16)}]`);
+
     // Device-level terminator used by some firmware variants.
     if (bytes.length === 2 && bytes[0] === 0xff && bytes[1] === 0xff) {
+      this._updateStatus(`!! TERMINATOR DETECTED (0xFF 0xFF) !!`);
       if (this.awaitingJpeg && this.jpegBuffer.length > 0) {
-        const forced = Buffer.concat([this.jpegBuffer, Buffer.from([0xff, 0xd9])]);
+        const endsWithEOI =
+          this.jpegBuffer.length >= 2 &&
+          this.jpegBuffer[this.jpegBuffer.length - 2] === 0xff &&
+          this.jpegBuffer[this.jpegBuffer.length - 1] === 0xd9;
+        const forced = endsWithEOI
+          ? this.jpegBuffer
+          : Buffer.concat([this.jpegBuffer, Buffer.from([0xff, 0xd9])]);
         this.jpegBuffer = Buffer.alloc(0);
         this.awaitingJpeg = false;
+        this._updateStatus(`!! FORCED EOI: ${forced.length}B JPEG`);
         this._consumeCompletedJpeg(forced);
+      } else {
+        this._updateStatus(`!! Term: awaiting=${this.awaitingJpeg}, bufLen=${this.jpegBuffer.length}`);
       }
       return;
     }
@@ -203,81 +320,84 @@ class GlassesService {
         bytes[3] === 0xff &&
         bytes[4] === 0xd8;
       payload = bytes.slice(hasOrientation ? 3 : 2);
+      this._updateStatus(`Pay: ${payload.length}B (ori=${hasOrientation})`);
+    } else {
+      this._updateStatus(`Pay: ${payload.length}B (raw)`);
     }
 
     this._ingestJpegPayload(payload);
   }
 
   _ingestJpegPayload(payload) {
-    if (!payload || payload.length === 0) return;
+    if (!payload || payload.length === 0) {
+      this._updateStatus("! Payload empty");
+      return;
+    }
 
     // If we're not currently collecting a JPEG, look for SOI marker.
     if (!this.awaitingJpeg) {
       const soi = payload.indexOf(Buffer.from([0xff, 0xd8]));
       if (soi === -1) {
+        this._updateStatus(`! No SOI in ${payload.length}B chunk`);
         return;
       }
       this.awaitingJpeg = true;
       this.jpegBuffer = payload.slice(soi);
+      this._updateStatus(`SOI found at offset ${soi}, buffer: ${this.jpegBuffer.length}B`);
     } else {
       this.jpegBuffer = Buffer.concat([this.jpegBuffer, payload]);
+      this._updateStatus(`Building... ${this.jpegBuffer.length}B total`);
     }
 
     if (this.jpegBuffer.length > this.maxJpegBytes) {
-      this._updateStatus("Dropping oversized/invalid image stream");
+      this._updateStatus("JPEG oversized, dropping");
       this.jpegBuffer = Buffer.alloc(0);
       this.awaitingJpeg = false;
       return;
     }
 
-    // One payload can contain one or more complete JPEGs.
-    while (this.awaitingJpeg) {
-      const eoi = this.jpegBuffer.indexOf(Buffer.from([0xff, 0xd9]));
-      if (eoi === -1) break;
-
-      const complete = this.jpegBuffer.slice(0, eoi + 2);
-      const remaining = this.jpegBuffer.slice(eoi + 2);
-      this.jpegBuffer = Buffer.alloc(0);
-      this.awaitingJpeg = false;
-      this._consumeCompletedJpeg(complete);
-
-      // Continue scanning trailing bytes for next SOI.
-      if (remaining.length > 0) {
-        const soi = remaining.indexOf(Buffer.from([0xff, 0xd8]));
-        if (soi !== -1) {
-          this.awaitingJpeg = true;
-          this.jpegBuffer = remaining.slice(soi);
-        }
-      }
-    }
+    // Firmware sends FF FF terminator. Keep buffering until terminator arrives.
+    this._updateStatus(`Waiting for terminator (${this.jpegBuffer.length}B so far)`);
   }
 
   _consumeCompletedJpeg(jpeg) {
-    const isValidJpeg =
-      jpeg &&
-      jpeg.length >= 2048 &&
-      jpeg[0] === 0xff &&
-      jpeg[1] === 0xd8 &&
-      jpeg[jpeg.length - 2] === 0xff &&
-      jpeg[jpeg.length - 1] === 0xd9;
+    const hasSOI = jpeg && jpeg[0] === 0xff && jpeg[1] === 0xd8;
+    const hasEOI = jpeg && jpeg[jpeg.length - 2] === 0xff && jpeg[jpeg.length - 1] === 0xd9;
+    const isLargeEnough = jpeg && jpeg.length >= 2048;
+    const isValidJpeg = hasSOI && hasEOI && isLargeEnough;
+
+    this._updateStatus(`VALIDATE: SOI=${hasSOI} EOI=${hasEOI} size=${jpeg?.length}B valid=${isValidJpeg}`);
 
     if (!isValidJpeg) {
       return;
     }
 
+    this._updateStatus(`✓ SAVING JPEG ${jpeg.length}B...`);
     void this._saveAndUploadPhoto(jpeg);
   }
 
   async _saveAndUploadPhoto(jpeg) {
+    if (!jpeg || !jpeg.length) {
+      this._updateStatus("Photo save skipped: empty JPEG buffer");
+      return;
+    }
+
     this.photoCount++;
-    this._updateStatus(`Photo ${this.photoCount} captured`);
 
     // Save locally first
     const filename = `photo_${Date.now()}.jpg`;
     const localUri = FileSystem.cacheDirectory + filename;
-    await FileSystem.writeAsStringAsync(localUri, jpeg.toString("base64"), {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    
+    try {
+      this._updateStatus(`Photo ${this.photoCount}: Writing to cache...`);
+      await FileSystem.writeAsStringAsync(localUri, jpeg.toString("base64"), {
+        encoding: "base64",
+      });
+      this._updateStatus(`Photo ${this.photoCount}: Saved! Uploading...`);
+    } catch (writeErr) {
+      this._updateStatus(`Photo ${this.photoCount}: SAVE FAILED - ${writeErr.message}`);
+      return;
+    }
 
     // Upload to VPS
     try {
@@ -290,8 +410,9 @@ class GlassesService {
           uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         }
       );
-    } catch (e) {
-      console.log("Upload error:", e);
+      this._updateStatus(`Photo ${this.photoCount}: ✓ Synced to VPS`);
+    } catch (uploadErr) {
+      this._updateStatus(`Photo ${this.photoCount}: Saved locally. Upload: ${uploadErr.message}`);
     }
 
     // Notify UI
@@ -307,6 +428,7 @@ class GlassesService {
 
     const safeSeconds = Math.max(0, Math.min(seconds, 300));
     await this._writePhotoControl(safeSeconds);
+    await this._startAutoCaptureFallback(safeSeconds);
     this._updateStatus(
       safeSeconds === 0
         ? "Capture stopped"
@@ -315,17 +437,26 @@ class GlassesService {
   }
 
   async takePhoto() {
-    await this._writePhotoControl(-1);
-    this._updateStatus("Single shot requested");
+    this._updateStatus(">>> SNAP PRESSED - Sending -1 to glasses <<<");
+    try {
+      await this._writePhotoControl(-1);
+      this._updateStatus(">>> BLE WRITE SENT - Waiting for chunks <<<");
+    } catch (e) {
+      this._updateStatus(`>>> ERROR: ${e.message} <<<`);
+    }
   }
 
   async stopCapture() {
+    await this._stopAutoCaptureLoop();
+    this.autoCaptureSeconds = 0;
     await this._writePhotoControl(0);
     this._updateStatus("Capture stopped");
   }
 
   async disconnect() {
     if (this.device) {
+      await this._stopAutoCaptureLoop();
+      this.autoCaptureSeconds = 0;
       await this.device.cancelConnection();
       this.device = null;
       this.connected = false;

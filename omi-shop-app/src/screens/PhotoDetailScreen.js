@@ -66,7 +66,7 @@ export default function PhotoDetailScreen({ route, navigation }) {
           uri: getPhotoFile(photo.id),
           headers: authHeaders,
         }}
-        style={styles.image}
+        style={[styles.image, styles.imageUpsideFix]}
         resizeMode="contain"
       />
 
@@ -112,6 +112,9 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 400,
     backgroundColor: "#000",
+  },
+  imageUpsideFix: {
+    transform: [{ rotate: "180deg" }],
   },
   meta: { padding: 20 },
   label: {

@@ -40,11 +40,15 @@ export default function GlassesScreen() {
 
   const requestPermissions = async () => {
     if (Platform.OS === "android" && Platform.Version >= 31) {
-      const granted = await PermissionsAndroid.requestMultiple([
+      const permissionList = [
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      ]);
+      ];
+      if (Platform.Version >= 33) {
+        permissionList.push(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      }
+      const granted = await PermissionsAndroid.requestMultiple(permissionList);
       const allGranted = Object.values(granted).every(
         (v) => v === PermissionsAndroid.RESULTS.GRANTED
       );
@@ -166,7 +170,7 @@ export default function GlassesScreen() {
       {lastPhoto && (
         <View style={styles.previewSection}>
           <Text style={styles.sectionTitle}>Last Capture</Text>
-          <Image source={{ uri: lastPhoto }} style={styles.preview} />
+          <Image source={{ uri: lastPhoto }} style={[styles.preview, styles.imageUpsideFix]} />
         </View>
       )}
     </ScrollView>
@@ -253,5 +257,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "#000",
     marginBottom: 30,
+  },
+  imageUpsideFix: {
+    transform: [{ rotate: "180deg" }],
   },
 });

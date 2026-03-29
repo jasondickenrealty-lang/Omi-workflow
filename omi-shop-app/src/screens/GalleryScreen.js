@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { getPhotos, getThumbUrl, getAuthHeaders } from "../services/api";
+import { getPhotos, getPhotoFile, getAuthHeaders } from "../services/api";
 
 export default function GalleryScreen({ navigation }) {
   const [photos, setPhotos] = useState([]);
@@ -63,10 +63,10 @@ export default function GalleryScreen({ navigation }) {
     >
       <Image
         source={{
-          uri: getThumbUrl(item.id),
+          uri: getPhotoFile(item.id),
           headers: authHeaders,
         }}
-        style={styles.thumb}
+        style={[styles.thumb, styles.imageUpsideFix]}
       />
       <Text style={styles.timestamp}>
         {new Date(item.timestamp).toLocaleTimeString()}
@@ -116,6 +116,9 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 6,
     backgroundColor: "#16213e",
+  },
+  imageUpsideFix: {
+    transform: [{ rotate: "180deg" }],
   },
   timestamp: {
     color: "#aaa",

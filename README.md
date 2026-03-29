@@ -12,6 +12,7 @@ FastAPI backend for the Omi AI glasses workflow: webhook ingestion, trigger dete
 - Async SQLite storage via SQLAlchemy
 - JWT authentication for protected endpoints
 - Photo and video route scaffolding
+- Automatic media retention: caps total photo/video storage and deletes oldest media first
 
 ## Tech Stack
 - Python

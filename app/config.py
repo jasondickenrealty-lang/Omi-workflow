@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # --- Storage ---
     photos_dir: str = str(Path(__file__).resolve().parent / "data" / "photos")
     videos_dir: str = str(Path(__file__).resolve().parent / "data" / "videos")
+    max_media_storage_bytes: int = 5 * 1024 * 1024 * 1024
 
     # --- Omi Hardware (placeholders for future modules) ---
     omi_glasses_ip: str = ""

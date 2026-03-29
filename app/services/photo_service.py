@@ -14,6 +14,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.services.media_retention_service import enforce_media_storage_limit
 from app.models.db_models import PhotoRecord
 
 THUMB_SIZE = (200, 200)
@@ -68,6 +69,7 @@ async def save_photo_from_bytes(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await enforce_media_storage_limit(db)
     return row
 
 
